@@ -1,39 +1,26 @@
-import { supabase } from '../lib/supabase.js'
-
-export default async function handler(req, res) {
-  const { action } = req.query
-
-  try {
-
-    // LOGIN
-    if (action === "login") {
-      const { email, password } = req.body
-
-      const { data, error } = await supabase.auth.signInWithPassword({
-        email,
-        password
-      })
-
-      if (error) throw error
-
-      const { data: user } = await supabase
-        .from('users')
-        .select('id, full_name, role, institute_code')
-        .eq('auth_user_id', data.user.id)
-        .single()
-
-      return res.status(200).json({
-        success: true,
-        data: {
-          user,
-          session: data.session
-        }
-      })
-    }
-
-    return res.status(400).json({ success: false, error: "Invalid action" })
-
-  } catch (err) {
-    return res.status(500).json({ success: false, error: err.message })
+if (action === "login") {
+  if (!req.body) {
+    return res.status(400).json({
+      success: false,
+      error: "Request body missing (use POST)"
+    })
   }
+
+  const { email, password } = req.body
+
+  if (!email || !password) {
+    return res.status(400).json({
+      success: false,
+      error: "Email and password required"
+    })
+  }
+
+  const { data, error } = await supabase.auth.signInWithPassword({
+    email,
+    password
+  })
+
+  if (error) throw error
+
+  return res.json({ success: true, data })
 }
