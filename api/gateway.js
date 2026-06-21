@@ -58,13 +58,26 @@ export default async function handler(req, res) {
         break;
 
       // ==========================================
-      // CORE DASHBOARD & JOBS
+      // DASHBOARD PAYLOAD
       // ==========================================
       case "getDashboardPayload":
-        const { data: userData } = await supabase.from('users').select('*, institutes(*), operator_profiles(*)').eq('auth_user_id', userContext.id).single();
+        // 1. Validate JWT Token
+        const { data: { user }, error: jwtErr } = await supabase.auth.getUser(token);
+        if (jwtErr || !user) return res.status(200).json({ authFailed: true, message: "Session expired." });
+
+        // 2. Fetch User & Institute joined data
+        const { data: userData, error: userErr } = await supabase.from('users').select('*, institutes(*), operator_profiles(*)').eq('auth_user_id', user.id).single();
+        if (userErr) console.error("User fetch error:", userErr);
+
+        // 3. Fetch Jobs & Notifications safely
         const { data: jobs } = await supabase.from('jobs_queue').select('*').eq('institute_id', userData.institute_code).order('created_at', { ascending: false });
         const { data: notifications } = await supabase.from('notifications').select('*').contains('target_roles', [userData.role]).order('created_at', { ascending: false }).limit(30);
 
+        // 🔥 THE FIX: Provide safe empty arrays if Supabase returns null
+        const safeJobs = jobs || [];
+        const safeNotifs = notifications || [];
+
+        // 4. Map to original payload structure
         result = {
           profile: {
             email: userData.email, name: userData.full_name, role: userData.role, 
@@ -78,10 +91,11 @@ export default async function handler(req, res) {
             instDetails: { logoUrl: userData.institutes?.logo_url }
           },
           data: {
-            papers: jobs.filter(j => j.job_type === 'Paper').map(j => ({ id: j.job_code, date: j.created_at, inst: userData.institutes?.institute_name, class: j.meta_data.class, subject: j.meta_data.subject, exam: j.meta_data.test_type, status: j.status, row: j.final_file_url })),
-            docs: jobs.filter(j => j.job_type !== 'Paper').map(j => ({ id: j.job_code, date: j.created_at, inst: userData.institutes?.institute_name, class: j.meta_data.class, type: j.job_type, exam: j.meta_data.exam_name, students: j.meta_data.num_students, status: j.status, row: j.final_file_url }))
+            // Using safeJobs here instead of jobs
+            papers: safeJobs.filter(j => j.job_type === 'Paper').map(j => ({ id: j.job_code, date: j.created_at, inst: userData.institutes?.institute_name, class: j.meta_data.class, subject: j.meta_data.subject, exam: j.meta_data.test_type, status: j.status, row: j.final_file_url })),
+            docs: safeJobs.filter(j => j.job_type !== 'Paper').map(j => ({ id: j.job_code, date: j.created_at, inst: userData.institutes?.institute_name, class: j.meta_data.class, type: j.job_type, exam: j.meta_data.exam_name, students: j.meta_data.num_students, status: j.status, row: j.final_file_url }))
           },
-          notifications: notifications,
+          notifications: safeNotifs,
           stats: {}, pricingMaster: []
         };
         break;
