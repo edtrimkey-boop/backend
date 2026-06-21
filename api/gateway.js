@@ -3,23 +3,24 @@ import { uploadToGoogleDrive, getOrCreateFolder } from '../lib/gdrive.js';
 import { sendPushNotification } from '../lib/firebase.js';
 
 export default async function handler(req, res) {
-// ... rest of the code
-  // 1. DYNAMIC CORS CONFIGURATION (Fixes the 127.0.0.1 and Hostinger block)
+  // 1. DYNAMIC CORS CONFIGURATION (Fixes the 127.0.0.1 block)
   const origin = req.headers.origin || '*';
   res.setHeader('Access-Control-Allow-Origin', origin); 
   res.setHeader('Access-Control-Allow-Credentials', 'true');
   res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT');
   res.setHeader('Access-Control-Allow-Headers', 'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version, Authorization');
 
-  // Handle the Preflight (OPTIONS) request instantly
+  // 2. PREFLIGHT CATCHER (Must be before anything else!)
   if (req.method === 'OPTIONS') {
       return res.status(200).end();
   }
 
+  // 3. METHOD CHECK
   if (req.method !== 'POST') {
       return res.status(405).json({ success: false, message: 'Only POST allowed' });
   }
 
+  // The rest of your try/catch logic starts here...
   const { action, email, password, token, ...payload } = req.body;
   
   // 🔥 The 'try' block begins here!
