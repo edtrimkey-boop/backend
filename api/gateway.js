@@ -105,14 +105,18 @@ export default async function handler(req, res) {
         const safeJobs = jobs || [];
         const safeNotifs = notifications || [];
 
-        result = {
+     result = {
           profile: {
             id: userData.id,
             instId: userData.institute_id || '',
-            email: userData.email, name: userData.full_name, role: userData.role, 
+            email: userData.email, 
+            name: userData.full_name, 
+            role: userData.role, 
+            subjects: userData.subjects || '', // 🔥 FIX: Injects the teacher's subject into the dashboard!
             institute: userData.institutes?.institute_name, 
             code: userData.institutes?.institute_code || userData.institutes?.code || '',
             profilePic: userData.profile_pic_url,
+            // ... rest of the profile
             toggles: {
                 attendance: userData.institutes?.attendance_toggle ? "YES" : "NO",
                 admission: userData.institutes?.admission_toggle ? "YES" : "NO",
@@ -170,7 +174,7 @@ export default async function handler(req, res) {
         }
         break;
 
-// ==========================================
+      // ==========================================
       // JOB CREATION (ISOLATED INST COUNTER & DYNAMIC DRIVE ROUTING)
       // ==========================================
       case "submitPaperJob":
@@ -204,25 +208,17 @@ export default async function handler(req, res) {
         const instCode = dbInst.institute_code || dbInst.code || "INST";
         const instName = dbInst.institute_name || "Unknown Institute";
 
-        // 3. ISOLATED INST COUNTER RUN: Determine sequence index filtered exclusively by this institute
-        const { data: latestJobs } = await supabase
+      // 3. ISOLATED INST COUNTER RUN (Using strict database counting, not string parsing)
+        const { count, error: countErr } = await supabase
             .from('jobs_queue')
-            .select('job_code')
-            .eq('institute_id', instUUID)
-            .order('created_at', { ascending: false });
+            .select('*', { count: 'exact', head: true })
+            .eq('institute_id', instUUID);
         
-        let nextNum = 1;
-        if (latestJobs && latestJobs.length > 0) {
-            const lastCode = latestJobs[0].job_code;
-            const parts = lastCode.split('-');
-            const lastNumStr = parts[parts.length - 1];
-            if (parts.length > 0 && !isNaN(lastNumStr)) {
-                nextNum = parseInt(lastNumStr, 10) + 1;
-            }
-        }
+        // If there are 0 jobs, it starts at 1. If there are 5 jobs, the next is 6.
+        const nextNum = (count || 0) + 1;
         const paperJobId = `TK-${instCode}-${String(nextNum).padStart(4, '0')}`;
 
-        // 4. PRECISE FILE NAMING SCHEME: (e.g., TK-KPS-0022_English_01.pdf)
+        // 4. PRECISE FILE NAMING SCHEME: (e.g., TK-KPS-0001_English_01.pdf)
         let ext = payload.mimeType === "application/pdf" ? ".pdf" : "";
         if (payload.fileName && payload.fileName.includes('.')) ext = '.' + payload.fileName.split('.').pop();
         const finalFileName = `${paperJobId}_${payload.subject}_${payload.testNo}${ext}`;
@@ -240,7 +236,7 @@ export default async function handler(req, res) {
             paperDriveUrl = await uploadToGoogleDrive(payload.fileBase64, finalFileName, payload.mimeType, finalFolderId);
         }
 
-        // 7. RECORD PERSISTENCE (Metadata structured in transactional JSON schema)
+        // 7. RECORD PERSISTENCE (Added deadline to metadata payload)
         const { error: submitDbError } = await supabase.from('jobs_queue').insert([{
             job_code: paperJobId, 
             institute_id: instUUID, 
@@ -249,10 +245,17 @@ export default async function handler(req, res) {
             status: 'Pending', 
             raw_file_url: paperDriveUrl,
             meta_data: { 
-                class: payload.className, subject: payload.subject, test_type: payload.testType,
-                test_no: payload.testNo, test_date: payload.testDate, duration: payload.duration,
-                questions: payload.numQuestions, full_marks: payload.fullMarks, pass_marks: payload.passMarks,
-                teacher_name: payload.teacherName
+                class: payload.className, 
+                subject: payload.subject, 
+                test_type: payload.testType,
+                test_no: payload.testNo, 
+                test_date: payload.testDate, 
+                duration: payload.duration,
+                questions: payload.numQuestions, 
+                full_marks: payload.fullMarks, 
+                pass_marks: payload.passMarks,
+                teacher_name: payload.teacherName,
+                deadline: payload.deadline // 🔥 FIX: Deadline is now saved securely in the database!
             }
         }]);
 
