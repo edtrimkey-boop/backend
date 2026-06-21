@@ -100,8 +100,9 @@ export default async function handler(req, res) {
         const safeNotifs = notifications || [];
 
         // Build Payload
-        result = {
+result = {
           profile: {
+            id: userContext.id, // 🔥 Added this so the frontend can read the UUID
             email: userData.email, name: userData.full_name, role: userData.role, 
             institute: userData.institutes?.institute_name, code: userData.institute_code,
             profilePic: userData.profile_pic_url,
