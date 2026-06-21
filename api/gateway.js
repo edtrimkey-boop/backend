@@ -84,15 +84,20 @@ export default async function handler(req, res) {
       // ==========================================
       // DASHBOARD DATA AGGREGATOR
       // ==========================================
+     // ==========================================
+      // DASHBOARD DATA AGGREGATOR
+      // ==========================================
       case "getDashboardPayload":
         const { data: userData } = await supabase.from('users').select('*, institutes(*), operator_profiles(*)').eq('auth_user_id', userContext.id).single();
         if (!userData) throw new Error("User profile corrupted.");
 
         const isSuperAdmin = ["super admin", "system admin", "all"].includes(String(userData.role).toLowerCase());
         
-        // Fetch base data
         let jobsQuery = supabase.from('jobs_queue').select('*').order('created_at', { ascending: false });
-        if (!isSuperAdmin) jobsQuery = jobsQuery.eq('institute_id', userData.institute_code);
+        
+        // 🔥 FIX: Changed from institute_code to institute_id to match your JSON!
+        if (!isSuperAdmin) jobsQuery = jobsQuery.eq('institute_id', userData.institute_id);
+        
         const { data: jobs } = await jobsQuery;
         
         const { data: notifications } = await supabase.from('notifications').select('*').contains('target_roles', [userData.role]).order('created_at', { ascending: false }).limit(30);
@@ -152,22 +157,33 @@ export default async function handler(req, res) {
         break;
 
       // ==========================================
-      // JOB CREATION (CUSTOM IDS & NESTED FOLDERS)
+      // JOB CREATION (PERFECT SCHEMA MAPPING)
       // ==========================================
       case "submitPaperJob":
-        // 1. SECURE FETCH: Two-step query to avoid Supabase Foreign Key crash
-        const { data: dbUser } = await supabase.from('users').select('id, institute_code').eq('auth_user_id', userContext.id).single();
-        if (!dbUser) throw new Error("Security Error: Account mapping invalid.");
-        
-        const instCode = dbUser.institute_code || payload.instCode;
+        // 1. SECURE FETCH: Grab the correct UUIDs based on your JSON schema
+        const { data: dbUser, error: mappingErr } = await supabase
+            .from('users')
+            .select(`
+                id, 
+                institute_id, 
+                institutes ( code, institute_name )
+            `)
+            .eq('auth_user_id', userContext.id)
+            .single();
+            
+        if (mappingErr || !dbUser) {
+            console.error("🚨 MAPPING ERROR:", mappingErr);
+            throw new Error("Security Error: Account mapping invalid.");
+        }
 
-        // Fetch Institute Name separately safely
-        const { data: dbInst } = await supabase.from('institutes').select('institute_name').eq('code', instCode).single();
-        const instName = dbInst ? dbInst.institute_name : "Unknown Institute";
+        const userUUID = dbUser.id; // Your "8d34d504..." UUID
+        const instUUID = dbUser.institute_id; // Your "550e8400..." UUID
+        const instCode = dbUser.institutes?.code || "INST"; // e.g., 'KPS'
+        const instName = dbUser.institutes?.institute_name || "Unknown Institute";
 
         // 2. GENERATE CUSTOM JOB ID (e.g., TK-KPS-0001)
         const { data: latestJobs } = await supabase.from('jobs_queue')
-            .select('job_code').eq('institute_id', instCode).order('created_at', { ascending: false }).limit(1);
+            .select('job_code').eq('institute_id', instUUID).order('created_at', { ascending: false }).limit(1);
         
         let nextNum = 1;
         if (latestJobs && latestJobs.length > 0) {
@@ -179,7 +195,7 @@ export default async function handler(req, res) {
         }
         const paperJobId = `TK-${instCode}-${String(nextNum).padStart(4, '0')}`;
 
-        // 3. GENERATE FILE NAME (e.g., TK-KPS-0022_English_01.pdf)
+        // 3. GENERATE FILE NAME (e.g., TK-KPS-0001_English_01.pdf)
         let ext = payload.mimeType === "application/pdf" ? ".pdf" : "";
         if (payload.fileName && payload.fileName.includes('.')) ext = '.' + payload.fileName.split('.').pop();
         const finalFileName = `${paperJobId}_${payload.subject}_${payload.testNo}${ext}`;
@@ -197,12 +213,12 @@ export default async function handler(req, res) {
             paperDriveUrl = await uploadToGoogleDrive(payload.fileBase64, finalFileName, payload.mimeType, finalFolderId);
         }
 
-        // 6. DB INSERT (Using JSON for metadata so we don't need 50 extra columns)
+        // 6. DB INSERT (Using exact UUIDs)
         const { error: dbError } = await supabase.from('jobs_queue').insert([{
             job_code: paperJobId, 
-            institute_id: instCode, 
+            institute_id: instUUID, // 🔥 FIX: Using the correct institute UUID
             job_type: 'Paper',
-            requester_id: dbUser.id, 
+            requester_id: userUUID, // 🔥 FIX: Using the correct users table UUID
             status: 'Pending', 
             raw_file_url: paperDriveUrl,
             meta_data: { 
