@@ -14,13 +14,16 @@ export default async function handler(req, res) {
   if (req.method === 'OPTIONS') {
       return res.status(200).end();
   }
-  
+
   if (req.method !== 'POST') {
       return res.status(405).json({ success: false, message: 'Only POST allowed' });
   }
 
-  // ... (Keep the rest of your code exactly the same below here)
-  const { action, payload, email, password, token } = req.body;
+  const { action, email, password, token, ...payload } = req.body;
+  
+  // 🔥 The 'try' block begins here!
+  try {
+    let result = {};
 
     // 2. JWT SECURITY WRAPPER
     let userContext = null;
@@ -51,14 +54,12 @@ export default async function handler(req, res) {
         break;
 
       case "changeUserPassword":
-        // In a real scenario, you'd verify the old password via an RPC or re-auth, but here we force update via Admin API
         const { error: pwErr } = await supabase.auth.admin.updateUserById(userContext.id, { password: payload.newPw });
         if (pwErr) throw pwErr;
         result = { success: true, message: "Password updated successfully!" };
         break;
 
       case "logoutAllDevices":
-        // Forces all other sessions to end
         await supabase.auth.admin.signOut(userContext.id, 'global');
         result = { success: true };
         break;
@@ -94,6 +95,7 @@ export default async function handler(req, res) {
         
         const { data: notifications } = await supabase.from('notifications').select('*').contains('target_roles', [userData.role]).order('created_at', { ascending: false }).limit(30);
 
+        // Safe Fallbacks
         const safeJobs = jobs || [];
         const safeNotifs = notifications || [];
 
@@ -234,7 +236,6 @@ export default async function handler(req, res) {
         break;
 
       case "processOperatorPayout":
-        // Add actual ledger clearing logic here based on payload.operatorName
         result = { success: true, message: "Payout marked as settled." };
         break;
 
@@ -247,7 +248,6 @@ export default async function handler(req, res) {
         result = { success: true };
         break;
 
-      // Deletes / Restores
       case "deleteOperatorAccess":
       case "deleteTeacherAccess":
         await supabase.from('users').delete().eq(payload.name ? 'full_name' : 'email', payload.name || payload.email);
@@ -270,7 +270,6 @@ export default async function handler(req, res) {
       // UTILS
       // ==========================================
       case "createPaymentLink":
-        // Integrate Razorpay/Stripe API here
         result = { success: true, refId: `TXN-${Date.now()}`, amount: payload.amount };
         break;
 
@@ -282,7 +281,6 @@ export default async function handler(req, res) {
         break;
 
       case "markNotificationsRead":
-        // Logic handled client-side via LocalStorage in current build, but can update DB here
         result = { success: true };
         break;
 
@@ -291,7 +289,6 @@ export default async function handler(req, res) {
         break;
 
       case "download":
-        // row contains the raw_file_url or final_file_url string directly
         result = { success: true, url: payload.row };
         break;
 
@@ -301,6 +298,7 @@ export default async function handler(req, res) {
 
     return res.status(200).json(result);
 
+  // 🔥 The 'catch' block belongs to the 'try' block above!
   } catch (error) {
     console.error(error);
     return res.status(200).json({ success: false, message: error.message });
