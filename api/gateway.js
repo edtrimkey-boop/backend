@@ -81,41 +81,37 @@ export default async function handler(req, res) {
         result = { success: true };
         break;
 
-      // ==========================================
-      // DASHBOARD DATA AGGREGATOR
-      // ==========================================
+
      // ==========================================
       // DASHBOARD DATA AGGREGATOR
       // ==========================================
       case "getDashboardPayload":
-        const { data: userData } = await supabase.from('users').select('*, institutes(*), operator_profiles(*)').eq('auth_user_id', userContext.id).single();
-        if (!userData) throw new Error("User profile corrupted.");
+        const { data: userData, error: userErr } = await supabase
+            .from('users')
+            .select('*, institutes(*), operator_profiles(*)')
+            .eq('auth_user_id', userContext.id)
+            .single();
+            
+        if (userErr || !userData) throw new Error("User profile corrupted.");
 
         const isSuperAdmin = ["super admin", "system admin", "all"].includes(String(userData.role).toLowerCase());
         
-        let jobsQuery = supabase.from('jobs_queue').select('*').order('created_at', { ascending: false });
-        
-        // 🔥 FIX: Changed from institute_code to institute_id to match your JSON!
-        if (!isSuperAdmin) jobsQuery = jobsQuery.eq('institute_id', userData.institute_id);
-        
-        const { data: jobs } = await jobsQuery;
+        let dashboardJobsQuery = supabase.from('jobs_queue').select('*').order('created_at', { ascending: false });
+        if (!isSuperAdmin) dashboardJobsQuery = dashboardJobsQuery.eq('institute_id', userData.institute_id);
+        const { data: jobs } = await dashboardJobsQuery;
         
         const { data: notifications } = await supabase.from('notifications').select('*').contains('target_roles', [userData.role]).order('created_at', { ascending: false }).limit(30);
 
-        // Safe Fallbacks
         const safeJobs = jobs || [];
         const safeNotifs = notifications || [];
 
-// Build Payload
         result = {
           profile: {
-            id: userData.id, // 🔥 FIX: This is now the 'users' table UUID!
-            instId: userData.institutes?.id || '', // 🔥 FIX: This is the 'institutes' table UUID!
-            email: userData.email, 
-            name: userData.full_name, 
-            role: userData.role, 
+            id: userData.id,
+            instId: userData.institute_id || '',
+            email: userData.email, name: userData.full_name, role: userData.role, 
             institute: userData.institutes?.institute_name, 
-            code: userData.institute_code,
+            code: userData.institutes?.institute_code || userData.institutes?.code || '',
             profilePic: userData.profile_pic_url,
             toggles: {
                 attendance: userData.institutes?.attendance_toggle ? "YES" : "NO",
@@ -130,11 +126,29 @@ export default async function handler(req, res) {
             ]
           },
           data: {
-          papers: safeJobs.filter(j => j.job_type === 'Paper').map(j => ({ id: j.job_code, date: j.created_at, inst: j.institute_id, class: j.meta_data?.class, subject: j.meta_data?.subject, exam: j.meta_data?.test_type, status: j.status, row: j.final_file_url })),
-            docs: safeJobs.filter(j => j.job_type !== 'Paper').map(j => ({ id: j.job_code, date: j.created_at, inst: j.institute_id, class: j.meta_data.class, type: j.job_type, exam: j.meta_data.exam_name, students: j.meta_data.num_students, status: j.status, row: j.final_file_url })),
-            myBilling: [],
-            instTeachers: [],
-            instStudents: []
+            // 🔥 FIXED: Maps rows with real institute names and falls back to raw_file_url so they appear instantly
+            papers: safeJobs.filter(j => j.job_type === 'Paper').map(j => ({ 
+                id: j.job_code, 
+                date: j.created_at, 
+                inst: userData.institutes?.institute_name || 'Unknown', 
+                class: j.meta_data?.class || '', 
+                subject: j.meta_data?.subject || '', 
+                exam: j.meta_data?.test_type || '', 
+                status: j.status, 
+                row: j.final_file_url || j.raw_file_url || '' 
+            })),
+            docs: safeJobs.filter(j => j.job_type !== 'Paper').map(j => ({ 
+                id: j.job_code, 
+                date: j.created_at, 
+                inst: userData.institutes?.institute_name || 'Unknown', 
+                class: j.meta_data?.class || '', 
+                type: j.job_type, 
+                exam: j.meta_data?.exam_name || '', 
+                students: j.meta_data?.num_students || 0, 
+                status: j.status, 
+                row: j.final_file_url || j.raw_file_url || '' 
+            })),
+            myBilling: [], instTeachers: [], instStudents: []
           },
           notifications: safeNotifs.map(n => ({ title: n.title, msg: n.message, time: n.created_at, isRead: false })),
           stats: {
@@ -149,7 +163,7 @@ export default async function handler(req, res) {
             const { data: allOps } = await supabase.from('users').select('*, operator_profiles(*)').eq('role', 'operator');
             result.superAdmin = {
                 kpi: { totalRev: 0, activeInst: allInst?.length || 0, pendingPay: 0, docsGen: safeJobs.length },
-                institutes: (allInst || []).map(i => ({ code: i.code, name: i.institute_name, plan: i.plan_type, status: i.is_active ? 'Active' : 'Inactive', rc: 0, ac: 0, papers: 0, toggles: { attendance: i.attendance_toggle?"YES":"NO", admission: i.admission_toggle?"YES":"NO", fee: i.fee_toggle?"YES":"NO" } })),
+                institutes: (allInst || []).map(i => ({ code: i.institute_code || i.code || '', name: i.institute_name, plan: i.plan_type, status: i.is_active ? 'Active' : 'Inactive', rc: 0, ac: 0, papers: 0, toggles: { attendance: i.attendance_toggle?"YES":"NO", admission: i.admission_toggle?"YES":"NO", fee: i.fee_toggle?"YES":"NO" } })),
                 operatorList: (allOps || []).map(o => ({ name: o.full_name, role: o.role, status: o.status, pending: 0, assigned: 0, completed: 0, totalEarnings: 0, clearedEarnings: 0, pendingPayouts: 0, upi: o.operator_profiles[0]?.upi })),
                 transactions: []
             };
@@ -157,68 +171,81 @@ export default async function handler(req, res) {
         break;
 
       // ==========================================
-      // JOB CREATION (PERFECT SCHEMA MAPPING)
+      // JOB CREATION (ISOLATED INST COUNTER & DYNAMIC DRIVE ROUTING)
       // ==========================================
       case "submitPaperJob":
-        // 1. SECURE FETCH: Grab the correct UUIDs based on your JSON schema
-        const { data: dbUser, error: mappingErr } = await supabase
+        // 1. SECURE USER FETCH: Get structural records via auth reference
+        const { data: dbUser, error: userErr } = await supabase
             .from('users')
-            .select(`
-                id, 
-                institute_id, 
-                institutes ( code, institute_name )
-            `)
+            .select('id, institute_id')
             .eq('auth_user_id', userContext.id)
             .single();
             
-        if (mappingErr || !dbUser) {
-            console.error("🚨 MAPPING ERROR:", mappingErr);
+        if (userErr || !dbUser) {
+            console.error("🚨 USER FETCH ERROR:", userErr);
             throw new Error("Security Error: Account mapping invalid.");
         }
 
-        const userUUID = dbUser.id; // Your "8d34d504..." UUID
-        const instUUID = dbUser.institute_id; // Your "550e8400..." UUID
-        const instCode = dbUser.institutes?.code || "INST"; // e.g., 'KPS'
-        const instName = dbUser.institutes?.institute_name || "Unknown Institute";
+        const userUUID = dbUser.id;
+        const instUUID = dbUser.institute_id;
 
-        // 2. GENERATE CUSTOM JOB ID (e.g., TK-KPS-0001)
-        const { data: latestJobs } = await supabase.from('jobs_queue')
-            .select('job_code').eq('institute_id', instUUID).order('created_at', { ascending: false }).limit(1);
+        // 2. SAFE INSTITUTE FETCH: Use select('*') to entirely bypass PostgreSQL column crashes
+        const { data: dbInst, error: instErr } = await supabase
+            .from('institutes')
+            .select('*')
+            .eq('id', instUUID)
+            .single();
+
+        if (instErr || !dbInst) {
+            console.error("🚨 INSTITUTE FETCH ERROR:", instErr);
+            throw new Error("Security Error: Institute mapping invalid.");
+        }
+
+        const instCode = dbInst.institute_code || dbInst.code || "INST";
+        const instName = dbInst.institute_name || "Unknown Institute";
+
+        // 3. ISOLATED INST COUNTER RUN: Determine sequence index filtered exclusively by this institute
+        const { data: latestJobs } = await supabase
+            .from('jobs_queue')
+            .select('job_code')
+            .eq('institute_id', instUUID)
+            .order('created_at', { ascending: false });
         
         let nextNum = 1;
         if (latestJobs && latestJobs.length > 0) {
             const lastCode = latestJobs[0].job_code;
             const parts = lastCode.split('-');
-            if (parts.length > 0 && !isNaN(parts[parts.length - 1])) {
-                nextNum = parseInt(parts[parts.length - 1], 10) + 1;
+            const lastNumStr = parts[parts.length - 1];
+            if (parts.length > 0 && !isNaN(lastNumStr)) {
+                nextNum = parseInt(lastNumStr, 10) + 1;
             }
         }
         const paperJobId = `TK-${instCode}-${String(nextNum).padStart(4, '0')}`;
 
-        // 3. GENERATE FILE NAME (e.g., TK-KPS-0001_English_01.pdf)
+        // 4. PRECISE FILE NAMING SCHEME: (e.g., TK-KPS-0022_English_01.pdf)
         let ext = payload.mimeType === "application/pdf" ? ".pdf" : "";
         if (payload.fileName && payload.fileName.includes('.')) ext = '.' + payload.fileName.split('.').pop();
         const finalFileName = `${paperJobId}_${payload.subject}_${payload.testNo}${ext}`;
 
-        // 4. NESTED FOLDERS: Root -> Institute Name -> Uploads_from_Teachers
+        // 5. NESTED SUBFOLDER ROUTING: Root -> Institute Name -> Uploads_from_Teachers
         let finalFolderId = process.env.DRIVE_ROOT_FOLDER_ID || '1KFVU84_ZqiMoK5GrkAQ4s_Wzasn6Jn6t';
         if (payload.fileBase64) {
             const instFolderId = await getOrCreateFolder(instName, finalFolderId);
             finalFolderId = await getOrCreateFolder('Uploads_from_Teachers', instFolderId);
         }
 
-        // 5. UPLOAD TO DRIVE
+        // 6. EXECUTE SECURE DRIVE BROADCAST
         let paperDriveUrl = "";
         if (payload.fileBase64) {
             paperDriveUrl = await uploadToGoogleDrive(payload.fileBase64, finalFileName, payload.mimeType, finalFolderId);
         }
 
-        // 6. DB INSERT (Using exact UUIDs)
+        // 7. RECORD PERSISTENCE (Metadata structured in transactional JSON schema)
         const { error: dbError } = await supabase.from('jobs_queue').insert([{
             job_code: paperJobId, 
-            institute_id: instUUID, // 🔥 FIX: Using the correct institute UUID
+            institute_id: instUUID, 
             job_type: 'Paper',
-            requester_id: userUUID, // 🔥 FIX: Using the correct users table UUID
+            requester_id: userUUID, 
             status: 'Pending', 
             raw_file_url: paperDriveUrl,
             meta_data: { 
