@@ -1,8 +1,9 @@
 import { supabase } from '../lib/supabase.js';
-import { uploadToGoogleDrive } from '../lib/gdrive.js';
+import { uploadToGoogleDrive, getOrCreateFolder } from '../lib/gdrive.js';
 import { sendPushNotification } from '../lib/firebase.js';
 
 export default async function handler(req, res) {
+// ... rest of the code
   // 1. DYNAMIC CORS CONFIGURATION (Fixes the 127.0.0.1 and Hostinger block)
   const origin = req.headers.origin || '*';
   res.setHeader('Access-Control-Allow-Origin', origin); 
