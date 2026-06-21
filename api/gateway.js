@@ -153,15 +153,41 @@ export default async function handler(req, res) {
       // ==========================================
       // JOB CREATION (G-DRIVE PIPELINE)
       // ==========================================
+  // ==========================================
+      // JOB CREATION (G-DRIVE PIPELINE)
+      // ==========================================
       case "submitPaperJob":
         let paperDriveUrl = payload.fileBase64 ? await uploadToGoogleDrive(payload.fileBase64, payload.fileName, payload.mimeType) : "";
         const paperJobId = `TK-P-${Math.floor(1000 + Math.random() * 9000)}`;
         
-        await supabase.from('jobs_queue').insert([{
-            job_code: paperJobId, institute_id: payload.instCode, job_type: 'Paper',
-            requester_id: userContext.id, status: 'Pending', raw_file_url: paperDriveUrl,
-            meta_data: { class: payload.className, subject: payload.subject, test_type: payload.testType }
+        // 1. Perform the Insert
+        const { error: dbError } = await supabase.from('jobs_queue').insert([{
+            job_code: paperJobId, 
+            institute_id: payload.instCode, 
+            job_type: 'Paper',
+            requester_id: userContext.id, 
+            status: 'Pending', 
+            raw_file_url: paperDriveUrl,
+            meta_data: { 
+                class: payload.className, 
+                subject: payload.subject, 
+                test_type: payload.testType,
+                test_no: payload.testNo,
+                test_date: payload.testDate,
+                duration: payload.duration,
+                questions: payload.numQuestions,
+                full_marks: payload.fullMarks,
+                pass_marks: payload.passMarks,
+                teacher_name: payload.teacherName
+            }
         }]);
+
+        // 2. 🔥 STRICT ERROR CHECK: If Supabase rejects it, throw an error!
+        if (dbError) {
+            console.error("SUPABASE INSERT ERROR:", dbError);
+            throw new Error("Database Error: " + dbError.message);
+        }
+
         result = { success: true, jobId: paperJobId };
         break;
 
