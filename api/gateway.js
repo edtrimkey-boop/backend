@@ -101,7 +101,6 @@ export default async function handler(req, res) {
         const safeJobs = jobs || [];
         const safeNotifs = notifications || [];
 
-        // Build Payload
 // Build Payload
         result = {
           profile: {
@@ -126,7 +125,7 @@ export default async function handler(req, res) {
             ]
           },
           data: {
-            papers: safeJobs.filter(j => j.job_type === 'Paper').map(j => ({ id: j.job_code, date: j.created_at, inst: j.institute_id, class: j.meta_data.class, subject: j.meta_data.subject, exam: j.meta_data.test_type, status: j.status, row: j.final_file_url })),
+          papers: safeJobs.filter(j => j.job_type === 'Paper').map(j => ({ id: j.job_code, date: j.created_at, inst: j.institute_id, class: j.meta_data?.class, subject: j.meta_data?.subject, exam: j.meta_data?.test_type, status: j.status, row: j.final_file_url })),
             docs: safeJobs.filter(j => j.job_type !== 'Paper').map(j => ({ id: j.job_code, date: j.created_at, inst: j.institute_id, class: j.meta_data.class, type: j.job_type, exam: j.meta_data.exam_name, students: j.meta_data.num_students, status: j.status, row: j.final_file_url })),
             myBilling: [],
             instTeachers: [],
@@ -156,12 +155,15 @@ export default async function handler(req, res) {
       // JOB CREATION (CUSTOM IDS & NESTED FOLDERS)
       // ==========================================
       case "submitPaperJob":
-        // 1. SECURE FETCH: Get true Database UUID and Institute Details directly from DB
-        const { data: dbUser } = await supabase.from('users').select('id, institute_code, institutes(institute_name)').eq('auth_user_id', userContext.id).single();
+        // 1. SECURE FETCH: Two-step query to avoid Supabase Foreign Key crash
+        const { data: dbUser } = await supabase.from('users').select('id, institute_code').eq('auth_user_id', userContext.id).single();
         if (!dbUser) throw new Error("Security Error: Account mapping invalid.");
         
-        const instCode = dbUser.institute_code; // e.g., 'KPS'
-        const instName = dbUser.institutes.institute_name; // e.g., 'Kalyani Public School'
+        const instCode = dbUser.institute_code || payload.instCode;
+
+        // Fetch Institute Name separately safely
+        const { data: dbInst } = await supabase.from('institutes').select('institute_name').eq('code', instCode).single();
+        const instName = dbInst ? dbInst.institute_name : "Unknown Institute";
 
         // 2. GENERATE CUSTOM JOB ID (e.g., TK-KPS-0001)
         const { data: latestJobs } = await supabase.from('jobs_queue')
@@ -171,7 +173,9 @@ export default async function handler(req, res) {
         if (latestJobs && latestJobs.length > 0) {
             const lastCode = latestJobs[0].job_code;
             const parts = lastCode.split('-');
-            if (!isNaN(parts[parts.length - 1])) nextNum = parseInt(parts[parts.length - 1], 10) + 1;
+            if (parts.length > 0 && !isNaN(parts[parts.length - 1])) {
+                nextNum = parseInt(parts[parts.length - 1], 10) + 1;
+            }
         }
         const paperJobId = `TK-${instCode}-${String(nextNum).padStart(4, '0')}`;
 
@@ -193,12 +197,12 @@ export default async function handler(req, res) {
             paperDriveUrl = await uploadToGoogleDrive(payload.fileBase64, finalFileName, payload.mimeType, finalFolderId);
         }
 
-        // 6. DB INSERT (Using secure dbUser.id)
+        // 6. DB INSERT (Using JSON for metadata so we don't need 50 extra columns)
         const { error: dbError } = await supabase.from('jobs_queue').insert([{
             job_code: paperJobId, 
             institute_id: instCode, 
             job_type: 'Paper',
-            requester_id: dbUser.id, // 🔥 FIX: Using exact DB UUID!
+            requester_id: dbUser.id, 
             status: 'Pending', 
             raw_file_url: paperDriveUrl,
             meta_data: { 
