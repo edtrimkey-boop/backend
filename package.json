@@ -1,8 +1,9 @@
 {
-  "name": "edtrimkey-backend",
-  "version": "1.0.0",
-  "type": "module",
+  "name": "ed-trim-key-backend",
+  "version": "4.0.0",
+  "main": "api/gateway.js",
   "dependencies": {
-    "@supabase/supabase-js": "^2.0.0"
+    "@supabase/supabase-js": "^2.39.3",
+    "googleapis": "^133.0.0"
   }
 }
