@@ -3,19 +3,24 @@ import { uploadToGoogleDrive } from '../lib/gdrive.js';
 import { sendPushNotification } from '../lib/firebase.js';
 
 export default async function handler(req, res) {
-  // 1. STRICT CORS HEADERS FOR HOSTINGER
-  res.setHeader('Access-Control-Allow-Credentials', true);
-  res.setHeader('Access-Control-Allow-Origin', '*'); // Or 'https://your-hostinger-domain.com'
+  // 1. DYNAMIC CORS CONFIGURATION (Fixes the 127.0.0.1 and Hostinger block)
+  const origin = req.headers.origin || '*';
+  res.setHeader('Access-Control-Allow-Origin', origin); 
+  res.setHeader('Access-Control-Allow-Credentials', 'true');
   res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT');
   res.setHeader('Access-Control-Allow-Headers', 'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version, Authorization');
 
-  if (req.method === 'OPTIONS') return res.status(200).end();
-  if (req.method !== 'POST') return res.status(405).json({ success: false, message: 'Only POST allowed' });
-
-  const { action, email, password, token, ...payload } = req.body;
+  // Handle the Preflight (OPTIONS) request instantly
+  if (req.method === 'OPTIONS') {
+      return res.status(200).end();
+  }
   
-  try {
-    let result = {};
+  if (req.method !== 'POST') {
+      return res.status(405).json({ success: false, message: 'Only POST allowed' });
+  }
+
+  // ... (Keep the rest of your code exactly the same below here)
+  const { action, payload, email, password, token } = req.body;
 
     // 2. JWT SECURITY WRAPPER
     let userContext = null;
