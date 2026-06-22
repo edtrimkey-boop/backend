@@ -119,7 +119,7 @@ export default async function handler(req, res) {
         const safeNotifs = notifications || [];
 
         // Build Payload
-        result = {
+      result = {
           profile: {
             id: userData.id,
             instId: userData.institute_id || '',
@@ -129,6 +129,8 @@ export default async function handler(req, res) {
             subjects: formattedTeacherSubjects || userData.subjects || userData.operator_profiles?.[0]?.subjects || 'Not Assigned',
             institute: userData.institutes?.institute_name, 
             code: userData.institutes?.institute_code || userData.institutes?.code || '',
+            // 🔥 FIX: Added Logo URL extraction (checks multiple common column names)
+            logo: userData.institutes?.logo_url || userData.institutes?.logo || userData.institutes?.institute_logo || '', 
             profilePic: userData.profile_pic_url,
             toggles: {
                 attendance: userData.institutes?.attendance_toggle ? "YES" : "NO",
