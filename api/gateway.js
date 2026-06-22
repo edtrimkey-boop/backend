@@ -293,26 +293,36 @@ export default async function handler(req, res) {
         deadlineDate.setHours(deadlineDate.getHours() + 48);
         const autoDeadlineTimestamp = deadlineDate.toISOString(); 
 
-  // 6.5 AUTO-ASSIGN OPERATOR ENGINE
+  // 6.5 BULLETPROOF AUTO-ASSIGN OPERATOR ENGINE
         let assignedOperatorId = null;
         
-        // Fetch all operators and their profiles
+        // Fetch all operators (selecting all columns to ensure we catch the data)
         const { data: operators, error: opErr } = await supabase
             .from('operator_profiles')
-            .select('user_id, work_types, subjects');
+            .select('*');
 
         if (!opErr && operators && operators.length > 0) {
-            // Filter operators based on Work Type AND Subject
             const matchingOperators = operators.filter(op => {
-                // 1. Must match Work Type (e.g., "Paper" or "Report Card")
-                const handlesWork = Array.isArray(op.work_types) && op.work_types.includes(jobTypeStr);
+                // 1. Flatten whatever Supabase returns into safe, searchable lowercase strings
+                const safeWorkTypes = JSON.stringify(op.work_types || op.workType || "").toLowerCase();
+                const safeSubjects = JSON.stringify(op.subjects || "").toLowerCase();
                 
-                // 2. Must match Subject (If the job has a subject. Documents usually don't!)
-                const handlesSubject = payload.subject 
-                    ? (Array.isArray(op.subjects) && op.subjects.includes(payload.subject)) 
-                    : true; 
+                // 2. Check Work Type (Fuzzy search)
+                const searchWork = (jobTypeStr || "paper").toLowerCase();
+                const handlesWork = safeWorkTypes.includes(searchWork) || safeWorkTypes.includes("paper format"); 
+                
+                // 3. Check Subject (If the job has a subject)
+                let handlesSubject = true;
+                if (payload.subject) {
+                    const searchSub = payload.subject.toLowerCase();
+                    handlesSubject = safeSubjects.includes(searchSub) || 
+                                     (searchSub === 'mathematics' && safeSubjects.includes('math'));
+                }
 
-                return handlesWork && handlesSubject;
+                // 4. Ensure the Operator is currently Active
+                const isActive = (op.status === "Active" || op.status === "Connected");
+
+                return handlesWork && handlesSubject && isActive;
             });
 
             // If we found matches, assign one randomly to distribute the workload!
