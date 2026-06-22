@@ -291,7 +291,7 @@ export default async function handler(req, res) {
         deadlineDate.setHours(deadlineDate.getHours() + 48);
         const autoDeadlineTimestamp = deadlineDate.toISOString(); 
 
-          // 6.5 AUTO-ASSIGN OPERATOR ENGINE
+  // 6.5 AUTO-ASSIGN OPERATOR ENGINE
         let assignedOperatorId = null;
         
         // Fetch all operators and their profiles
@@ -320,7 +320,6 @@ export default async function handler(req, res) {
             }
         }
 
-
         // 7. RECORD PERSISTENCE
         const { error: submitDbError } = await supabase.from('jobs_queue').insert([{
             job_code: universalJobId, 
@@ -339,31 +338,6 @@ export default async function handler(req, res) {
                 test_no: payload.testNo, 
                 test_date: payload.testDate || payload.docDate, 
                 num_students: payload.numStudents,
-                duration: payload.duration,
-                questions: payload.numQuestions, 
-                full_marks: payload.fullMarks, 
-                pass_marks: payload.passMarks,
-                teacher_name: payload.teacherName
-            }
-        }]);
-        
-        // 7. RECORD PERSISTENCE
-        const { error: submitDbError } = await supabase.from('jobs_queue').insert([{
-            job_code: universalJobId, // 🔥 CHANGE 1: Used to be paperJobId
-            institute_id: instUUID, 
-            job_type: payload.jobType || 'Paper', // 🔥 dynamically saves "Report Card", "Paper", etc.
-            requester_id: userUUID, 
-            status: 'Pending', 
-            raw_file_url: paperDriveUrl,
-            deadline: autoDeadlineTimestamp,
-            meta_data: { 
-                class: payload.className, 
-                exam_name: payload.examName, // Matches documents
-                subject: payload.subject, 
-                test_type: payload.testType,
-                test_no: payload.testNo, 
-                test_date: payload.testDate || payload.docDate, // Maps announcement date
-                num_students: payload.numStudents, // Saves student count
                 duration: payload.duration,
                 questions: payload.numQuestions, 
                 full_marks: payload.fullMarks, 
