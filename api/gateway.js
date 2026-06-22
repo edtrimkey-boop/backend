@@ -86,7 +86,6 @@ export default async function handler(req, res) {
       // DASHBOARD DATA AGGREGATOR
       // ==========================================
       case "getDashboardPayload":
-        // 1. Fetch the core user profile
         const { data: userData, error: userErr } = await supabase
             .from('users')
             .select('*, institutes(*), operator_profiles(*)')
@@ -95,14 +94,13 @@ export default async function handler(req, res) {
             
         if (userErr || !userData) throw new Error("User profile corrupted.");
 
-        // 2. EXPLICIT FETCH: Directly query the teacher_profiles table using the User UUID
+        // 🔥 SUBJECT FIX: Changed to .maybeSingle() so it doesn't crash if no profile exists!
         const { data: teacherProfile } = await supabase
             .from('teacher_profiles')
             .select('subject_handles')
             .eq('user_id', userData.id)
-            .single();
+            .maybeSingle(); 
 
-        // 3. Format the array into a clean string
         let formattedTeacherSubjects = null;
         if (teacherProfile && teacherProfile.subject_handles) {
             const handles = teacherProfile.subject_handles;
@@ -128,26 +126,19 @@ export default async function handler(req, res) {
             email: userData.email, 
             name: userData.full_name, 
             role: userData.role, 
-            // 🔥 FIX: Now uses the explicitly fetched teacher subjects!
             subjects: formattedTeacherSubjects || userData.subjects || userData.operator_profiles?.[0]?.subjects || 'Not Assigned',
             institute: userData.institutes?.institute_name, 
             code: userData.institutes?.institute_code || userData.institutes?.code || '',
             profilePic: userData.profile_pic_url,
-            // ... rest of the profile
             toggles: {
                 attendance: userData.institutes?.attendance_toggle ? "YES" : "NO",
                 admission: userData.institutes?.admission_toggle ? "YES" : "NO",
                 fee: userData.institutes?.fee_toggle ? "YES" : "NO"
             },
-            instDetails: userData.institutes || {},
-            dynamicApps: [
-              { name: "Attendance App", url: "YOUR_ATTENDANCE_URL", targetRole: "all" },
-              { name: "Admission App", url: "YOUR_ADMISSION_URL", targetRole: "admin" },
-              { name: "Fee System", url: "YOUR_FEE_URL", targetRole: "admin" }
-            ]
+            instDetails: userData.institutes || {}
           },
           data: {
-            // 🔥 FIXED: Maps rows with real institute names and falls back to raw_file_url so they appear instantly
+            // 🔥 DEADLINE FIX: Added "deadline: j.deadline" so Vercel finally sends it to the frontend!
             papers: safeJobs.filter(j => j.job_type === 'Paper').map(j => ({ 
                 id: j.job_code, 
                 date: j.created_at, 
@@ -155,6 +146,7 @@ export default async function handler(req, res) {
                 class: j.meta_data?.class || '', 
                 subject: j.meta_data?.subject || '', 
                 exam: j.meta_data?.test_type || '', 
+                deadline: j.deadline || 'No Deadline', 
                 status: j.status, 
                 row: j.final_file_url || j.raw_file_url || '' 
             })),
@@ -166,6 +158,7 @@ export default async function handler(req, res) {
                 type: j.job_type, 
                 exam: j.meta_data?.exam_name || '', 
                 students: j.meta_data?.num_students || 0, 
+                deadline: j.deadline || 'No Deadline',
                 status: j.status, 
                 row: j.final_file_url || j.raw_file_url || '' 
             })),
