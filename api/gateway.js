@@ -296,22 +296,21 @@ export default async function handler(req, res) {
   // 6.5 BULLETPROOF AUTO-ASSIGN OPERATOR ENGINE
         let assignedOperatorId = null;
         
-        // Fetch all operators (selecting all columns to ensure we catch the data)
+        // Fetch all operators
         const { data: operators, error: opErr } = await supabase
             .from('operator_profiles')
             .select('*');
 
+        console.log(`[Auto-Assign] Found ${operators ? operators.length : 0} operators in DB.`);
+
         if (!opErr && operators && operators.length > 0) {
             const matchingOperators = operators.filter(op => {
-                // 1. Flatten whatever Supabase returns into safe, searchable lowercase strings
                 const safeWorkTypes = JSON.stringify(op.work_types || op.workType || "").toLowerCase();
                 const safeSubjects = JSON.stringify(op.subjects || "").toLowerCase();
                 
-                // 2. Check Work Type (Fuzzy search)
                 const searchWork = (jobTypeStr || "paper").toLowerCase();
                 const handlesWork = safeWorkTypes.includes(searchWork) || safeWorkTypes.includes("paper format"); 
                 
-                // 3. Check Subject (If the job has a subject)
                 let handlesSubject = true;
                 if (payload.subject) {
                     const searchSub = payload.subject.toLowerCase();
@@ -319,17 +318,25 @@ export default async function handler(req, res) {
                                      (searchSub === 'mathematics' && safeSubjects.includes('math'));
                 }
 
-                // 4. Ensure the Operator is currently Active
-                const isActive = (op.status === "Active" || op.status === "Connected");
+                // 🔥 THE FIX: If status is null or undefined, assume they are active!
+                const isActive = (!op.status || op.status === "Active" || op.status === "Connected");
+
+                // Logs the exact math to your Vercel Dashboard so you can see it!
+                console.log(`[Auto-Assign Check] Op ID: ${op.user_id} | WorkMatch: ${handlesWork} | SubMatch: ${handlesSubject} | Active: ${isActive}`);
 
                 return handlesWork && handlesSubject && isActive;
             });
 
-            // If we found matches, assign one randomly to distribute the workload!
+            console.log(`[Auto-Assign] Found ${matchingOperators.length} perfect matches!`);
+
             if (matchingOperators.length > 0) {
                 const randomIndex = Math.floor(Math.random() * matchingOperators.length);
-                assignedOperatorId = matchingOperators[randomIndex].user_id;
+                // 🔥 Fallback: Grab user_id. If missing, grab id.
+                assignedOperatorId = matchingOperators[randomIndex].user_id || matchingOperators[randomIndex].id;
+                console.log(`[Auto-Assign] SUCCESS! Assigned to Operator: ${assignedOperatorId}`);
             }
+        } else {
+            console.log(`[Auto-Assign] Error or empty table:`, opErr);
         }
 
         // 7. RECORD PERSISTENCE
