@@ -82,11 +82,10 @@ export default async function handler(req, res) {
         break;
 
 
-     // ==========================================
+// ==========================================
       // DASHBOARD DATA AGGREGATOR
       // ==========================================
-    case "getDashboardPayload":
-        // 🔥 FIX: Added teacher_profiles(*) just in case subjects are stored in a separate table
+      case "getDashboardPayload":
         const { data: userData, error: userErr } = await supabase
             .from('users')
             .select('*, institutes(*), operator_profiles(*), teacher_profiles(*)')
@@ -105,15 +104,24 @@ export default async function handler(req, res) {
         const safeJobs = jobs || [];
         const safeNotifs = notifications || [];
 
-    result = {
+// 🔥 FIX: Extract and format the subject_handles array from teacher_profiles
+        let formattedTeacherSubjects = null;
+        if (userData.teacher_profiles && userData.teacher_profiles.length > 0) {
+            const handles = userData.teacher_profiles[0].subject_handles;
+            // If it's an array, join it into a neat string: "Mathematics, Science, Hindi"
+            formattedTeacherSubjects = Array.isArray(handles) ? handles.join(', ') : handles;
+        }
+
+        // Build Payload
+        result = {
           profile: {
             id: userData.id,
             instId: userData.institute_id || '',
             email: userData.email, 
             name: userData.full_name, 
             role: userData.role, 
-            // 🔥 FIX: Dynamically checks root, teacher_profiles, and operator_profiles for subjects!
-            subjects: userData.subjects || userData.teacher_profiles?.[0]?.subjects || userData.operator_profiles?.[0]?.subjects || 'Not Assigned',
+            // 🔥 FIX: Now uses the correctly formatted array!
+            subjects: userData.subjects || formattedTeacherSubjects || userData.operator_profiles?.[0]?.subjects || 'Not Assigned',
             institute: userData.institutes?.institute_name, 
             code: userData.institutes?.institute_code || userData.institutes?.code || '',
             profilePic: userData.profile_pic_url,
