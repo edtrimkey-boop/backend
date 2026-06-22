@@ -85,15 +85,15 @@ export default async function handler(req, res) {
      // ==========================================
       // DASHBOARD DATA AGGREGATOR
       // ==========================================
-      case "getDashboardPayload":
+    case "getDashboardPayload":
+        // 🔥 FIX: Added teacher_profiles(*) just in case subjects are stored in a separate table
         const { data: userData, error: userErr } = await supabase
             .from('users')
-            .select('*, institutes(*), operator_profiles(*)')
+            .select('*, institutes(*), operator_profiles(*), teacher_profiles(*)')
             .eq('auth_user_id', userContext.id)
             .single();
             
         if (userErr || !userData) throw new Error("User profile corrupted.");
-
         const isSuperAdmin = ["super admin", "system admin", "all"].includes(String(userData.role).toLowerCase());
         
         let dashboardJobsQuery = supabase.from('jobs_queue').select('*').order('created_at', { ascending: false });
@@ -105,14 +105,15 @@ export default async function handler(req, res) {
         const safeJobs = jobs || [];
         const safeNotifs = notifications || [];
 
-     result = {
+    result = {
           profile: {
             id: userData.id,
             instId: userData.institute_id || '',
             email: userData.email, 
             name: userData.full_name, 
             role: userData.role, 
-            subjects: userData.subjects || '', // 🔥 FIX: Injects the teacher's subject into the dashboard!
+            // 🔥 FIX: Dynamically checks root, teacher_profiles, and operator_profiles for subjects!
+            subjects: userData.subjects || userData.teacher_profiles?.[0]?.subjects || userData.operator_profiles?.[0]?.subjects || 'Not Assigned',
             institute: userData.institutes?.institute_name, 
             code: userData.institutes?.institute_code || userData.institutes?.code || '',
             profilePic: userData.profile_pic_url,
@@ -208,22 +209,30 @@ export default async function handler(req, res) {
         const instCode = dbInst.institute_code || dbInst.code || "INST";
         const instName = dbInst.institute_name || "Unknown Institute";
 
-      // 3. ISOLATED INST COUNTER RUN (Using strict database counting, not string parsing)
-        const { count, error: countErr } = await supabase
+     // 3. PERFECT INSTITUTE-SPECIFIC COUNTER (Uses Regex to strictly find the last number)
+        const { data: latestJobs } = await supabase
             .from('jobs_queue')
-            .select('*', { count: 'exact', head: true })
-            .eq('institute_id', instUUID);
+            .select('job_code')
+            .eq('institute_id', instUUID)
+            .order('created_at', { ascending: false })
+            .limit(1);
         
-        // If there are 0 jobs, it starts at 1. If there are 5 jobs, the next is 6.
-        const nextNum = (count || 0) + 1;
+        let nextNum = 1;
+        if (latestJobs && latestJobs.length > 0) {
+            const lastCode = latestJobs[0].job_code; // e.g., 'TK-KPS-0004'
+            const match = lastCode.match(/\d+$/); // Safely extracts only the trailing digits
+            if (match) {
+                nextNum = parseInt(match[0], 10) + 1;
+            }
+        }
         const paperJobId = `TK-${instCode}-${String(nextNum).padStart(4, '0')}`;
 
-        // 4. PRECISE FILE NAMING SCHEME: (e.g., TK-KPS-0001_English_01.pdf)
+        // 4. PRECISE FILE NAMING SCHEME
         let ext = payload.mimeType === "application/pdf" ? ".pdf" : "";
         if (payload.fileName && payload.fileName.includes('.')) ext = '.' + payload.fileName.split('.').pop();
         const finalFileName = `${paperJobId}_${payload.subject}_${payload.testNo}${ext}`;
 
-        // 5. NESTED SUBFOLDER ROUTING: Root -> Institute Name -> Uploads_from_Teachers
+        // 5. NESTED SUBFOLDER ROUTING
         let finalFolderId = process.env.DRIVE_ROOT_FOLDER_ID || '1KFVU84_ZqiMoK5GrkAQ4s_Wzasn6Jn6t';
         if (payload.fileBase64) {
             const instFolderId = await getOrCreateFolder(instName, finalFolderId);
@@ -236,7 +245,7 @@ export default async function handler(req, res) {
             paperDriveUrl = await uploadToGoogleDrive(payload.fileBase64, finalFileName, payload.mimeType, finalFolderId);
         }
 
-        // 7. RECORD PERSISTENCE (Added deadline to metadata payload)
+        // 7. RECORD PERSISTENCE
         const { error: submitDbError } = await supabase.from('jobs_queue').insert([{
             job_code: paperJobId, 
             institute_id: instUUID, 
@@ -244,6 +253,7 @@ export default async function handler(req, res) {
             requester_id: userUUID, 
             status: 'Pending', 
             raw_file_url: paperDriveUrl,
+            deadline: payload.deadline, // 🔥 FIX: Moved out of meta_data and into the ROOT column!
             meta_data: { 
                 class: payload.className, 
                 subject: payload.subject, 
@@ -254,8 +264,7 @@ export default async function handler(req, res) {
                 questions: payload.numQuestions, 
                 full_marks: payload.fullMarks, 
                 pass_marks: payload.passMarks,
-                teacher_name: payload.teacherName,
-                deadline: payload.deadline // 🔥 FIX: Deadline is now saved securely in the database!
+                teacher_name: payload.teacherName
             }
         }]);
 
