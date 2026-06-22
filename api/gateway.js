@@ -86,31 +86,39 @@ export default async function handler(req, res) {
       // DASHBOARD DATA AGGREGATOR
       // ==========================================
       case "getDashboardPayload":
+        // 1. Fetch the core user profile
         const { data: userData, error: userErr } = await supabase
             .from('users')
-            .select('*, institutes(*), operator_profiles(*), teacher_profiles(*)')
+            .select('*, institutes(*), operator_profiles(*)')
             .eq('auth_user_id', userContext.id)
             .single();
             
         if (userErr || !userData) throw new Error("User profile corrupted.");
-        const isSuperAdmin = ["super admin", "system admin", "all"].includes(String(userData.role).toLowerCase());
-        
+
+        // 2. EXPLICIT FETCH: Directly query the teacher_profiles table using the User UUID
+        const { data: teacherProfile } = await supabase
+            .from('teacher_profiles')
+            .select('subject_handles')
+            .eq('user_id', userData.id)
+            .single();
+
+        // 3. Format the array into a clean string
+        let formattedTeacherSubjects = null;
+        if (teacherProfile && teacherProfile.subject_handles) {
+            const handles = teacherProfile.subject_handles;
+            formattedTeacherSubjects = Array.isArray(handles) ? handles.join(', ') : handles;
+        }
+
         let dashboardJobsQuery = supabase.from('jobs_queue').select('*').order('created_at', { ascending: false });
-        if (!isSuperAdmin) dashboardJobsQuery = dashboardJobsQuery.eq('institute_id', userData.institute_id);
-        const { data: jobs } = await dashboardJobsQuery;
         
+        const isSuperAdmin = ["super admin", "system admin", "all"].includes(String(userData.role).toLowerCase());
+        if (!isSuperAdmin) dashboardJobsQuery = dashboardJobsQuery.eq('institute_id', userData.institute_id);
+        
+        const { data: jobs } = await dashboardJobsQuery;
         const { data: notifications } = await supabase.from('notifications').select('*').contains('target_roles', [userData.role]).order('created_at', { ascending: false }).limit(30);
 
         const safeJobs = jobs || [];
         const safeNotifs = notifications || [];
-
-// 🔥 FIX: Extract and format the subject_handles array from teacher_profiles
-        let formattedTeacherSubjects = null;
-        if (userData.teacher_profiles && userData.teacher_profiles.length > 0) {
-            const handles = userData.teacher_profiles[0].subject_handles;
-            // If it's an array, join it into a neat string: "Mathematics, Science, Hindi"
-            formattedTeacherSubjects = Array.isArray(handles) ? handles.join(', ') : handles;
-        }
 
         // Build Payload
         result = {
@@ -120,8 +128,8 @@ export default async function handler(req, res) {
             email: userData.email, 
             name: userData.full_name, 
             role: userData.role, 
-            // 🔥 FIX: Now uses the correctly formatted array!
-            subjects: userData.subjects || formattedTeacherSubjects || userData.operator_profiles?.[0]?.subjects || 'Not Assigned',
+            // 🔥 FIX: Now uses the explicitly fetched teacher subjects!
+            subjects: formattedTeacherSubjects || userData.subjects || userData.operator_profiles?.[0]?.subjects || 'Not Assigned',
             institute: userData.institutes?.institute_name, 
             code: userData.institutes?.institute_code || userData.institutes?.code || '',
             profilePic: userData.profile_pic_url,
