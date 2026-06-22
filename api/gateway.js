@@ -254,6 +254,11 @@ export default async function handler(req, res) {
             paperDriveUrl = await uploadToGoogleDrive(payload.fileBase64, finalFileName, payload.mimeType, finalFolderId);
         }
 
+        // 🔥 FIX 1: Generate a perfect 48-hour deadline directly on the server
+        const deadlineDate = new Date();
+        deadlineDate.setHours(deadlineDate.getHours() + 48);
+        const autoDeadlineTimestamp = deadlineDate.toISOString(); 
+
         // 7. RECORD PERSISTENCE
         const { error: submitDbError } = await supabase.from('jobs_queue').insert([{
             job_code: paperJobId, 
@@ -262,7 +267,7 @@ export default async function handler(req, res) {
             requester_id: userUUID, 
             status: 'Pending', 
             raw_file_url: paperDriveUrl,
-            deadline: payload.deadline, // 🔥 FIX: Moved out of meta_data and into the ROOT column!
+            deadline: autoDeadlineTimestamp, // 🔥 Inserts the perfect 48-hour timestamp!
             meta_data: { 
                 class: payload.className, 
                 subject: payload.subject, 
