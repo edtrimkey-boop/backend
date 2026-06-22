@@ -248,34 +248,30 @@ export default async function handler(req, res) {
         
         const universalJobId = `${instCode}-${typeCode}-${currentYearStr}-${String(nextNum).padStart(4, '0')}`;
 
-        // 4. DYNAMIC FILE NAMING SCHEME
+// 4. PRECISE FILE NAMING SCHEME (Job ID ONLY)
         let ext = payload.mimeType === "application/pdf" ? ".pdf" : "";
         if (payload.fileName && payload.fileName.includes('.')) ext = '.' + payload.fileName.split('.').pop();
         
-        let finalFileName = "";
-        const examName = payload.testType || payload.examName || "Exam"; 
-        const sessionStr = payload.session || "2026-2027";
+        // 🔥 FIX 1: The file name is now strictly the universal ID
+        const finalFileName = `${universalJobId}${ext}`;
 
-        if (jobTypeStr === "Paper") {
-            finalFileName = `${universalJobId}_${payload.className}_${examName}-${payload.testNo}${ext}`;
-        } else {
-            finalFileName = `${universalJobId}_${payload.className}_${examName}${ext}`;
-        }
-
-        // 5. DEEP NESTED DRIVE ROUTING
-        // Base Root -> 4_Institutes -> Institute Name
+        // 5. DEEP NESTED DRIVE ROUTING (Fixed Duplicate Root)
+        // Base Folder IS '4_Institutes'
         let baseFolderId = process.env.DRIVE_ROOT_FOLDER_ID || '1U0hXB394ogLsfRCpjbtR-XU48B_Xutzt';
         let finalFolderId = baseFolderId;
 
         if (payload.fileBase64) {
-            const level1_Institutes = await getOrCreateFolder('4_Institutes', baseFolderId);
-            const level2_InstName = await getOrCreateFolder(instName, level1_Institutes);
+            const examName = payload.testType || payload.examName || "Exam"; 
+            const sessionStr = payload.session || "2026-2027";
+            
+            // 🔥 FIX 2: We search for the Institute directly inside the Base Folder
+            const level2_InstName = await getOrCreateFolder(instName, baseFolderId);
 
             if (jobTypeStr === "Paper") {
-                // Paper Route: 4_Institutes -> [Institute Name] -> Uploads_from_Teachers
+                // Paper Route: 4_Institutes -> Keystone Public School -> Uploads_from_Teachers
                 finalFolderId = await getOrCreateFolder('Uploads_from_Teachers', level2_InstName);
             } else {
-                // Document Route: 4_Institutes -> [Inst Name] -> Documents_Upload -> [Type] -> [Session] -> [Class] -> [Exam]
+                // Document Route: 4_Institutes -> Keystone Public School -> Documents_Upload -> Report Cards -> 2026-2027 -> Class 1 -> Annual Term Exam
                 const level3_Docs = await getOrCreateFolder('Documents_Upload', level2_InstName);
                 const level4_Type = await getOrCreateFolder(jobTypeStr, level3_Docs);
                 const level5_Session = await getOrCreateFolder(sessionStr, level4_Type);
