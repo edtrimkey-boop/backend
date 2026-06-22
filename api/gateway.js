@@ -218,35 +218,34 @@ export default async function handler(req, res) {
         const instCode = dbInst.institute_code || dbInst.code || "INST";
         const instName = dbInst.institute_name || "Unknown Institute";
 
-    // 3. UNIVERSAL JOB ID ENGINE (e.g., KPS-RC-26-0001)
+   // 3. UNIVERSAL JOB ID ENGINE (WITH INDEPENDENT SEQUENCES)
+        const jobTypeStr = payload.jobType || "Paper"; // Ensures papers get categorized safely
         const jobTypeCodes = {
             "Paper": "PPR",
-            "Report Cards": "RC",
-            "Admit Cards": "AC",
-            "Id Card": "ID",
-            "Certificates": "CERT"
+            "Report Card": "RC",
+            "Admit Card": "AC",
+            "ID Card": "ID",
+            "Certificate": "CERT"
         };
-        const typeCode = jobTypeCodes[payload.jobType || "Paper"] || "GEN";
-        const currentYearStr = new Date().getFullYear().toString().slice(-2); // "26"
+        const typeCode = jobTypeCodes[jobTypeStr] || "GEN";
+        const currentYearStr = new Date().getFullYear().toString().slice(-2);
 
-        // Search for the absolute latest job for this institute (Ignoring Job Type!)
+        // 🔥 FIX: Added .eq('job_type') so Papers and Documents have separate 0001 sequences!
         const { data: latestJobs } = await supabase
             .from('jobs_queue')
             .select('job_code')
             .eq('institute_id', instUUID)
+            .eq('job_type', jobTypeStr) 
             .order('created_at', { ascending: false })
             .limit(1);
         
         let nextNum = 1;
         if (latestJobs && latestJobs.length > 0) {
-            const lastCode = latestJobs[0].job_code; // e.g., 'KPS-PPR-26-0001'
-            const match = lastCode.match(/\d+$/); // Grabs the '0001'
-            if (match) {
-                nextNum = parseInt(match[0], 10) + 1;
-            }
+            const lastCode = latestJobs[0].job_code;
+            const match = lastCode.match(/\d+$/);
+            if (match) nextNum = parseInt(match[0], 10) + 1;
         }
         
-        // Final ID Construction
         const universalJobId = `${instCode}-${typeCode}-${currentYearStr}-${String(nextNum).padStart(4, '0')}`;
 
         // 4. DYNAMIC FILE NAMING SCHEME
@@ -254,21 +253,35 @@ export default async function handler(req, res) {
         if (payload.fileName && payload.fileName.includes('.')) ext = '.' + payload.fileName.split('.').pop();
         
         let finalFileName = "";
-        const examName = payload.testType || payload.examName || "Exam"; // Fallback mapping
+        const examName = payload.testType || payload.examName || "Exam"; 
+        const sessionStr = payload.session || "2026-2027";
 
-        if (payload.jobType === "Paper" || !payload.jobType) {
-            // Paper Format: KPS-PPR-26-0001_Class 1_Annual Exam-02
+        if (jobTypeStr === "Paper") {
             finalFileName = `${universalJobId}_${payload.className}_${examName}-${payload.testNo}${ext}`;
         } else {
-            // Document Format: KPS-RC-26-0001_Class 1_Annual Exam
             finalFileName = `${universalJobId}_${payload.className}_${examName}${ext}`;
         }
 
-        // 5. NESTED SUBFOLDER ROUTING
-        let finalFolderId = process.env.DRIVE_ROOT_FOLDER_ID || '1KFVU84_ZqiMoK5GrkAQ4s_Wzasn6Jn6t';
+        // 5. DEEP NESTED DRIVE ROUTING
+        // Base Root -> 4_Institutes -> Institute Name
+        let baseFolderId = process.env.DRIVE_ROOT_FOLDER_ID || '1U0hXB394ogLsfRCpjbtR-XU48B_Xutzt';
+        let finalFolderId = baseFolderId;
+
         if (payload.fileBase64) {
-            const instFolderId = await getOrCreateFolder(instName, finalFolderId);
-            finalFolderId = await getOrCreateFolder('Uploads_from_Teachers', instFolderId);
+            const level1_Institutes = await getOrCreateFolder('4_Institutes', baseFolderId);
+            const level2_InstName = await getOrCreateFolder(instName, level1_Institutes);
+
+            if (jobTypeStr === "Paper") {
+                // Paper Route: 4_Institutes -> [Institute Name] -> Uploads_from_Teachers
+                finalFolderId = await getOrCreateFolder('Uploads_from_Teachers', level2_InstName);
+            } else {
+                // Document Route: 4_Institutes -> [Inst Name] -> Documents_Upload -> [Type] -> [Session] -> [Class] -> [Exam]
+                const level3_Docs = await getOrCreateFolder('Documents_Upload', level2_InstName);
+                const level4_Type = await getOrCreateFolder(jobTypeStr, level3_Docs);
+                const level5_Session = await getOrCreateFolder(sessionStr, level4_Type);
+                const level6_Class = await getOrCreateFolder(payload.className || 'Unknown Class', level5_Session);
+                finalFolderId = await getOrCreateFolder(examName, level6_Class);
+            }
         }
 
         // 6. EXECUTE SECURE DRIVE BROADCAST
