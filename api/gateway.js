@@ -108,7 +108,7 @@ export default async function handler(req, res) {
 
         // 4. Shape the data EXACTLY as index.html expects it
        // Build Payload
-        result = {
+        return = {
           profile: {
             id: userData.id,
             instId: userData.institute_id || '',
