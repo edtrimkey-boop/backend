@@ -94,7 +94,6 @@ export default async function handler(req, res) {
             
         if (userErr || !userData) throw new Error("User profile corrupted.");
 
-        // 🔥 SUBJECT FIX: Changed to .maybeSingle() so it doesn't crash if no profile exists!
         const { data: teacherProfile } = await supabase
             .from('teacher_profiles')
             .select('subject_handles')
@@ -115,28 +114,34 @@ export default async function handler(req, res) {
         let papersQuery = supabase.from('jobs_queue').select('*').eq('job_type', 'Paper');
         let docsQuery = supabase.from('jobs_queue').select('*').not('job_type', 'eq', 'Paper');
 
-        // Apply dynamic row-level isolation based on role
         if (userRole === 'teacher') {
-            // Teachers can ONLY see papers/documents they personally requested
             papersQuery = papersQuery.eq('requester_id', userUUID);
             docsQuery = docsQuery.eq('requester_id', userUUID);
         } else if (userRole === 'admin') {
-            // Institute Admins see everything belonging to their entire institute
             papersQuery = papersQuery.eq('institute_id', instUUID);
             docsQuery = docsQuery.eq('institute_id', instUUID);
         } else if (userRole === 'operator') {
-            // Operators ONLY see jobs that have been assigned to them
             papersQuery = papersQuery.eq('operator_id', userUUID);
             docsQuery = docsQuery.eq('operator_id', userUUID);
         }
-        // (If role is super admin / system admin, no filters are appended, so they see global data)
 
         // 2. EXECUTE ISOLATED FETCHES
         const { data: papersData } = await papersQuery.order('created_at', { ascending: false });
         const { data: docsData } = await docsQuery.order('created_at', { ascending: false });
 
+        // 🔥 THE FIX: Safely merge the secure data streams back into one array!
+        const safeJobs = [...(papersData || []), ...(docsData || [])];
+
+        // 3. FETCH NOTIFICATIONS
+        const { data: notifications } = await supabase.from('notifications')
+            .select('*')
+            .contains('target_roles', [userData.role])
+            .order('created_at', { ascending: false })
+            .limit(30);
+        const safeNotifs = notifications || [];
+
         // Build Payload
-      result = {
+        result = {
           profile: {
             id: userData.id,
             instId: userData.institute_id || '',
@@ -146,7 +151,6 @@ export default async function handler(req, res) {
             subjects: formattedTeacherSubjects || userData.subjects || userData.operator_profiles?.[0]?.subjects || 'Not Assigned',
             institute: userData.institutes?.institute_name, 
             code: userData.institutes?.institute_code || userData.institutes?.code || '',
-            // 🔥 FIX: Added Logo URL extraction (checks multiple common column names)
             logo: userData.institutes?.logo_url || userData.institutes?.logo || userData.institutes?.institute_logo || '', 
             profilePic: userData.profile_pic_url,
             toggles: {
@@ -157,7 +161,6 @@ export default async function handler(req, res) {
             instDetails: userData.institutes || {}
           },
           data: {
-            // 🔥 DEADLINE FIX: Added "deadline: j.deadline" so Vercel finally sends it to the frontend!
             papers: safeJobs.filter(j => j.job_type === 'Paper').map(j => ({ 
                 id: j.job_code, 
                 date: j.created_at, 
@@ -191,6 +194,7 @@ export default async function handler(req, res) {
           }
         };
 
+        const isSuperAdmin = ["super admin", "system admin", "all"].includes(userRole);
         if (isSuperAdmin) {
             const { data: allInst } = await supabase.from('institutes').select('*');
             const { data: allOps } = await supabase.from('users').select('*, operator_profiles(*)').eq('role', 'operator');
