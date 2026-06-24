@@ -107,15 +107,15 @@ export default async function handler(req, res) {
         const safeNotifs = notifsRes.data || []
 
         // 4. Shape the data EXACTLY as index.html expects it
-        return {
-          success: true,
+       // Build Payload
+        result = {
           profile: {
             id: userData.id,
             instId: userData.institute_id || '',
             email: userData.email, 
             name: userData.full_name, 
             role: userData.role, 
-            subjects: userData.subjects || userData.operator_profiles?.[0]?.subjects || 'Not Assigned',
+            subjects: formattedTeacherSubjects || userData.subjects || userData.operator_profiles?.[0]?.subjects || 'Not Assigned',
             institute: userData.institutes?.institute_name || '', 
             code: userData.institutes?.institute_code || userData.institutes?.code || '',
             logo: userData.institutes?.logo_url || userData.institutes?.logo || '', 
