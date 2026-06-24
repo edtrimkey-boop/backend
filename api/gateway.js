@@ -1,6 +1,5 @@
 import { supabase } from '../lib/supabase.js'
 import { uploadToGoogleDrive, getOrCreateFolder } from '../lib/gdrive.js'
-// import { sendPushNotification } from '../lib/firebase.js' // Uncomment if used
 
 export default async function handler(req, res) {
 
@@ -38,13 +37,13 @@ export default async function handler(req, res) {
     }
 
     // ===============================
-    // ⚡ HANDLERS (ULTRA FAST ROUTER)
+    // ⚡ HANDLERS (ULTRA FAST ISOLATED ROUTER)
     // ===============================
     const handlers = {
 
-      // ===============================
+      // -----------------------------------------------------
       // 🔐 LOGIN
-      // ===============================
+      // -----------------------------------------------------
       login: async () => {
         const { data, error } = await supabase.auth.signInWithPassword({ email, password })
         if (error) throw error
@@ -65,38 +64,53 @@ export default async function handler(req, res) {
         }
       },
 
-      // ===============================
-      // 📊 DASHBOARD (PARALLEL FETCH & CONTRACT FIXED)
-      // ===============================
+      // -----------------------------------------------------
+      // 📊 DASHBOARD (PARALLEL FETCH & PRIVACY ISOLATION)
+      // -----------------------------------------------------
       getDashboardPayload: async () => {
         
-        // 1. Fetch User Data with Inner Joins
-        const { data: userData } = await supabase
+        // 1. Fetch Core User Data
+        const { data: userData, error: userErr } = await supabase
           .from('users')
           .select('*, institutes(*), operator_profiles(*)')
           .eq('auth_user_id', userContext.id)
           .single()
+          
+        if (userErr || !userData) throw new Error("User profile corrupted.")
 
-        const dashRole = String(userData.role).trim().toLowerCase()
+        // 2. Fetch Teacher Subjects (Safely)
+        const { data: teacherProfile } = await supabase
+          .from('teacher_profiles')
+          .select('subject_handles')
+          .eq('user_id', userData.id)
+          .maybeSingle()
+
+        let formattedTeacherSubjects = null
+        if (teacherProfile && teacherProfile.subject_handles) {
+            const handles = teacherProfile.subject_handles
+            formattedTeacherSubjects = Array.isArray(handles) ? handles.join(', ') : handles
+        }
+
+        // 3. Setup Privacy Filters
+        const role = String(userData.role).trim().toLowerCase()
         const userId = userData.id
         const instId = userData.institute_id
 
-        // 2. Setup Privacy Queries
         let papersQuery = supabase.from('jobs_queue').select('*').eq('job_type', 'Paper')
         let docsQuery = supabase.from('jobs_queue').select('*').neq('job_type', 'Paper')
 
-        if (dashRole === 'teacher') {
+        if (role === 'teacher') {
           papersQuery = papersQuery.eq('requester_id', userId)
           docsQuery = docsQuery.eq('requester_id', userId)
-        } else if (dashRole === 'admin') {
+        } else if (role === 'admin') {
           papersQuery = papersQuery.eq('institute_id', instId)
           docsQuery = docsQuery.eq('institute_id', instId)
-        } else if (dashRole === 'operator') {
+        } else if (role === 'operator') {
           papersQuery = papersQuery.eq('operator_id', userId)
           docsQuery = docsQuery.eq('operator_id', userId)
         }
 
-        // 3. 🔥 PARALLEL EXECUTION (All 3 queries run at exactly the same time)
+        // 4. Execute Queries Simultaneously (Parallel Speed)
         const [papersRes, docsRes, notifsRes] = await Promise.all([
           papersQuery.order('created_at', { ascending: false }),
           docsQuery.order('created_at', { ascending: false }),
@@ -106,9 +120,8 @@ export default async function handler(req, res) {
         const safeJobs = [...(papersRes.data || []), ...(docsRes.data || [])]
         const safeNotifs = notifsRes.data || []
 
-        // 4. Shape the data EXACTLY as index.html expects it
-       // Build Payload
-        return {
+        // 5. Build Perfect Frontend Payload
+        let result = {
           success: true,
           profile: {
             id: userData.id,
@@ -119,7 +132,7 @@ export default async function handler(req, res) {
             subjects: formattedTeacherSubjects || userData.subjects || userData.operator_profiles?.[0]?.subjects || 'Not Assigned',
             institute: userData.institutes?.institute_name || '', 
             code: userData.institutes?.institute_code || userData.institutes?.code || '',
-            logo: userData.institutes?.logo_url || userData.institutes?.logo || '', 
+            logo: userData.institutes?.logo_url || userData.institutes?.logo || userData.institutes?.institute_logo || '', 
             profilePic: userData.profile_pic_url,
             toggles: {
                 attendance: userData.institutes?.attendance_toggle ? "YES" : "NO",
@@ -143,7 +156,8 @@ export default async function handler(req, res) {
                 exam: j.meta_data?.exam_name || '', students: j.meta_data?.num_students || 0, 
                 deadline: j.deadline || 'No Deadline', status: j.status, 
                 row: j.final_file_url || j.raw_file_url || '' 
-            }))
+            })),
+            myBilling: [], instTeachers: [], instStudents: []
           },
           notifications: safeNotifs.map(n => ({ title: n.title, msg: n.message, time: n.created_at, isRead: false })),
           stats: {
@@ -152,11 +166,25 @@ export default async function handler(req, res) {
              financial: { total: 0, pending: 0 }
           }
         }
+
+        const isSuperAdmin = ["super admin", "system admin", "all"].includes(role)
+        if (isSuperAdmin) {
+            const { data: allInst } = await supabase.from('institutes').select('*')
+            const { data: allOps } = await supabase.from('users').select('*, operator_profiles(*)').eq('role', 'operator')
+            result.superAdmin = {
+                kpi: { totalRev: 0, activeInst: allInst?.length || 0, pendingPay: 0, docsGen: safeJobs.length },
+                institutes: (allInst || []).map(i => ({ code: i.institute_code || i.code || '', name: i.institute_name, plan: i.plan_type, status: i.is_active ? 'Active' : 'Inactive', rc: 0, ac: 0, papers: 0, toggles: { attendance: i.attendance_toggle?"YES":"NO", admission: i.admission_toggle?"YES":"NO", fee: i.fee_toggle?"YES":"NO" } })),
+                operatorList: (allOps || []).map(o => ({ name: o.full_name, role: o.role, status: o.status, pending: 0, assigned: 0, completed: 0, totalEarnings: 0, clearedEarnings: 0, pendingPayouts: 0, upi: o.operator_profiles[0]?.upi })),
+                transactions: []
+            }
+        }
+
+        return result
       },
 
-      // ===============================
-      // 📄 CREATE JOB (OPTIMIZED & PARALLEL)
-      // ===============================
+      // -----------------------------------------------------
+      // 📄 CREATE JOB (OPTIMIZED & PARALLEL AUTO-ASSIGN)
+      // -----------------------------------------------------
       submitPaperJob: async () => {
 
         // 1. Fetch User & Inst in ONE query
@@ -166,62 +194,70 @@ export default async function handler(req, res) {
           .eq('auth_user_id', userContext.id)
           .single()
 
-        const instData = Array.isArray(dbUser.institutes) ? dbUser.institutes[0] : dbUser.institutes;
-        const instCode = instData?.institute_code || "TK";
-        const instName = instData?.institute_name || "Unknown Inst";
+        const instData = Array.isArray(dbUser.institutes) ? dbUser.institutes[0] : dbUser.institutes
+        const instCode = instData?.institute_code || "TK"
+        const instName = instData?.institute_name || "Unknown Inst"
 
         const jobTypeStr = payload.jobType || "Paper"
         const jobId = `${instCode}-${Date.now()}`
 
-        // 2. 🔥 PARALLEL EXECUTION: Upload to Drive AND Search for Operator simultaneously!
-        
-        // Task A: Google Drive Upload
+        // 2. PARALLEL EXECUTION: Drive Upload + Operator Match run at the same time
         const uploadTask = async () => {
-          if (!payload.fileBase64) return "";
-          // (Assuming deep routing is handled inside getOrCreateFolder if needed, else base folder)
-          let folderId = await getOrCreateFolder(instName); 
-          if(jobTypeStr === "Paper") {
-              folderId = await getOrCreateFolder('Uploads_from_Teachers', folderId);
-          } else {
-              folderId = await getOrCreateFolder('Documents_Upload', folderId);
-          }
-          let ext = payload.mimeType === "application/pdf" ? ".pdf" : "";
-          if (payload.fileName && payload.fileName.includes('.')) ext = '.' + payload.fileName.split('.').pop();
+          if (!payload.fileBase64) return ""
           
-          return await uploadToGoogleDrive(payload.fileBase64, jobId + ext, payload.mimeType, folderId);
+          let baseFolderId = process.env.DRIVE_ROOT_FOLDER_ID || '1U0hXB394ogLsfRCpjbtR-XU48B_Xutzt'
+          let finalFolderId = baseFolderId
+          
+          const level2_InstName = await getOrCreateFolder(instName, baseFolderId)
+
+          if (jobTypeStr === "Paper") {
+              finalFolderId = await getOrCreateFolder('Uploads_from_Teachers', level2_InstName)
+          } else {
+              const level3_Docs = await getOrCreateFolder('Documents_Upload', level2_InstName)
+              const level4_Type = await getOrCreateFolder(jobTypeStr, level3_Docs)
+              const level5_Session = await getOrCreateFolder(payload.session || "2026-2027", level4_Type)
+              const level6_Class = await getOrCreateFolder(payload.className || 'Unknown Class', level5_Session)
+              finalFolderId = await getOrCreateFolder(payload.examName || "Exam", level6_Class)
+          }
+
+          let ext = payload.mimeType === "application/pdf" ? ".pdf" : ""
+          if (payload.fileName && payload.fileName.includes('.')) ext = '.' + payload.fileName.split('.').pop()
+          
+          return await uploadToGoogleDrive(payload.fileBase64, jobId + ext, payload.mimeType, finalFolderId)
         }
 
-        // Task B: Auto-Assign Operator
         const assignTask = async () => {
-          const { data: ops } = await supabase.from('operator_profiles').select('user_id, work_types, subjects, status');
-          if (!ops) return null;
+          const { data: ops } = await supabase.from('operator_profiles').select('*')
+          if (!ops || ops.length === 0) return null
           
           const matches = ops.filter(op => {
-             const isActive = (!op.status || op.status === "Active" || op.status === "Connected");
-             if (!isActive) return false;
-
-             const safeWork = JSON.stringify(op.work_types || "").toLowerCase();
-             const safeSub = JSON.stringify(op.subjects || "").toLowerCase();
+             const safeWork = JSON.stringify(op.work_types || op.workType || "").toLowerCase()
+             const safeSub = JSON.stringify(op.subjects || "").toLowerCase()
              
-             const reqWork = jobTypeStr.toLowerCase();
-             const handlesWork = safeWork.includes(reqWork) || safeWork.includes("paper format");
+             const reqWork = jobTypeStr.toLowerCase()
+             const handlesWork = safeWork.includes(reqWork) || safeWork.includes("paper format")
              
-             let handlesSub = true;
+             let handlesSub = true
              if (payload.subject) {
-                 const reqSub = payload.subject.toLowerCase();
-                 handlesSub = safeSub.includes(reqSub) || (reqSub === 'mathematics' && safeSub.includes('math'));
+                 const reqSub = payload.subject.toLowerCase()
+                 handlesSub = safeSub.includes(reqSub) || (reqSub === 'mathematics' && safeSub.includes('math'))
              }
-             return handlesWork && handlesSub;
-          });
+
+             // Handle missing status safely
+             const isActive = (!op.status || op.status === "Active" || op.status === "Connected")
+
+             return handlesWork && handlesSub && isActive
+          })
 
           if (matches.length > 0) {
-             return matches[Math.floor(Math.random() * matches.length)].user_id;
+             const randomIndex = Math.floor(Math.random() * matches.length)
+             return matches[randomIndex].user_id || matches[randomIndex].id
           }
-          return null;
+          return null
         }
 
-        // Wait for both tasks to finish at the same time
-        const [fileUrl, assignedOperatorId] = await Promise.all([uploadTask(), assignTask()]);
+        // Wait for both tasks to finish simultaneously
+        const [fileUrl, assignedOperatorId] = await Promise.all([uploadTask(), assignTask()])
 
         // 3. Insert Fast
         await supabase.from('jobs_queue').insert([{
@@ -229,7 +265,7 @@ export default async function handler(req, res) {
           job_type: jobTypeStr,
           institute_id: dbUser.institute_id,
           requester_id: dbUser.id,
-          operator_id: assignedOperatorId, // Stamped perfectly
+          operator_id: assignedOperatorId,
           status: "Pending",
           raw_file_url: fileUrl,
           meta_data: {
@@ -241,9 +277,9 @@ export default async function handler(req, res) {
         return { success: true, jobId }
       },
 
-      // ===============================
+      // -----------------------------------------------------
       // 🔔 NOTIFICATION
-      // ===============================
+      // -----------------------------------------------------
       sendNotification: async () => {
         await supabase.from('notifications').insert([{
           sender_id: userContext.id,
