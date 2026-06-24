@@ -106,30 +106,30 @@ export default async function handler(req, res) {
             formattedTeacherSubjects = Array.isArray(handles) ? handles.join(', ') : handles;
         }
         
-        // 1. DETERMINE STRICT PRIVACY FILTERS
-        const userRole = String(userData.role).trim().toLowerCase();
-        const userUUID = userData.id;
-        const instUUID = userData.institute_id;
+        // 1. DETERMINE STRICT PRIVACY FILTERS (🔥 FIXED SCOPE VARIABLES)
+        const dashRole = String(userData.role).trim().toLowerCase();
+        const dashUserUUID = userData.id;
+        const dashInstUUID = userData.institute_id;
 
         let papersQuery = supabase.from('jobs_queue').select('*').eq('job_type', 'Paper');
         let docsQuery = supabase.from('jobs_queue').select('*').not('job_type', 'eq', 'Paper');
 
-        if (userRole === 'teacher') {
-            papersQuery = papersQuery.eq('requester_id', userUUID);
-            docsQuery = docsQuery.eq('requester_id', userUUID);
-        } else if (userRole === 'admin') {
-            papersQuery = papersQuery.eq('institute_id', instUUID);
-            docsQuery = docsQuery.eq('institute_id', instUUID);
-        } else if (userRole === 'operator') {
-            papersQuery = papersQuery.eq('operator_id', userUUID);
-            docsQuery = docsQuery.eq('operator_id', userUUID);
+        if (dashRole === 'teacher') {
+            papersQuery = papersQuery.eq('requester_id', dashUserUUID);
+            docsQuery = docsQuery.eq('requester_id', dashUserUUID);
+        } else if (dashRole === 'admin') {
+            papersQuery = papersQuery.eq('institute_id', dashInstUUID);
+            docsQuery = docsQuery.eq('institute_id', dashInstUUID);
+        } else if (dashRole === 'operator') {
+            papersQuery = papersQuery.eq('operator_id', dashUserUUID);
+            docsQuery = docsQuery.eq('operator_id', dashUserUUID);
         }
 
         // 2. EXECUTE ISOLATED FETCHES
         const { data: papersData } = await papersQuery.order('created_at', { ascending: false });
         const { data: docsData } = await docsQuery.order('created_at', { ascending: false });
 
-        // 🔥 THE FIX: Safely merge the secure data streams back into one array!
+        // Safely merge the secure data streams back into one array!
         const safeJobs = [...(papersData || []), ...(docsData || [])];
 
         // 3. FETCH NOTIFICATIONS
@@ -194,7 +194,7 @@ export default async function handler(req, res) {
           }
         };
 
-        const isSuperAdmin = ["super admin", "system admin", "all"].includes(userRole);
+        const isSuperAdmin = ["super admin", "system admin", "all"].includes(dashRole);
         if (isSuperAdmin) {
             const { data: allInst } = await supabase.from('institutes').select('*');
             const { data: allOps } = await supabase.from('users').select('*, operator_profiles(*)').eq('role', 'operator');
