@@ -527,6 +527,15 @@ export default async function handler(req, res) {
         result = { success: true, url: payload.row };
         break;
 
+        case "requestJobRevision":
+        const { data: jobInfo } = await supabase.from('jobs_queue').select('meta_data').eq('job_code', payload.jobId).single();
+        let newMeta = jobInfo?.meta_data || {};
+        newMeta.latest_correction_note = payload.note;
+        
+        await supabase.from('jobs_queue').update({ status: 'Pending Revision', meta_data: newMeta }).eq('job_code', payload.jobId);
+        result = { success: true };
+        break;
+
       default:
         throw new Error("Invalid API Action requested: " + action);
     }
